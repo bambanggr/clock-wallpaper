@@ -5,4 +5,5 @@ dist/
 build/
 .venv/
 venv/
+env/
 clock_wp_*.png

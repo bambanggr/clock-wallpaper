@@ -2,17 +2,39 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_DIR="$SCRIPT_DIR/.venv"
 PYTHON="$(which python3)"
 SERVICE_DIR="$HOME/.config/systemd/user"
 SERVICE_FILE="$SERVICE_DIR/clock-wallpaper.service"
 
 echo "=== Clock Wallpaper Installer (Linux) ==="
 
-# Install Pillow if missing
-if ! "$PYTHON" -c "import PIL" 2>/dev/null; then
-    echo "Installing Pillow..."
-    pip3 install -r "$SCRIPT_DIR/requirements.txt"
+# Ensure venv module is available
+if ! "$PYTHON" -m venv --help &>/dev/null; then
+    echo "python3-venv not found, attempting to install..."
+    if command -v apt-get &>/dev/null; then
+        sudo apt-get install -y python3-venv
+    elif command -v dnf &>/dev/null; then
+        sudo dnf install -y python3-venv
+    elif command -v pacman &>/dev/null; then
+        sudo pacman -S --noconfirm python-virtualenv
+    else
+        echo "Cannot install python3-venv automatically. Install it manually and re-run."
+        exit 1
+    fi
 fi
+
+# Create virtual environment
+if [ ! -d "$VENV_DIR" ]; then
+    echo "Creating virtual environment at $VENV_DIR ..."
+    "$PYTHON" -m venv "$VENV_DIR"
+fi
+
+VENV_PYTHON="$VENV_DIR/bin/python3"
+
+echo "Installing dependencies into venv..."
+"$VENV_PYTHON" -m pip install --quiet --upgrade pip
+"$VENV_PYTHON" -m pip install --quiet -r "$SCRIPT_DIR/requirements.txt"
 
 # Create systemd user service
 mkdir -p "$SERVICE_DIR"
@@ -24,7 +46,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=$PYTHON $SCRIPT_DIR/clock_wallpaper.py
+ExecStart=$VENV_PYTHON $SCRIPT_DIR/clock_wallpaper.py
 Restart=on-failure
 RestartSec=5
 

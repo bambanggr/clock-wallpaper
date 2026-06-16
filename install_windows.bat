@@ -2,6 +2,7 @@
 setlocal
 
 set SCRIPT_DIR=%~dp0
+set VENV_DIR=%SCRIPT_DIR%.venv
 set STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup
 set VBS_RUNNER=%SCRIPT_DIR%start_wallpaper.vbs
 
@@ -15,9 +16,21 @@ if errorlevel 1 (
     exit /b 1
 )
 
-:: Install Pillow
+:: Create virtual environment if missing
+if not exist "%VENV_DIR%\Scripts\python.exe" (
+    echo Creating virtual environment...
+    python -m venv "%VENV_DIR%"
+    if errorlevel 1 (
+        echo ERROR: Failed to create venv. Make sure Python has venv support.
+        pause
+        exit /b 1
+    )
+)
+
+:: Install dependencies
 echo Installing dependencies...
-pip install -r "%SCRIPT_DIR%requirements.txt"
+"%VENV_DIR%\Scripts\pip.exe" install --quiet --upgrade pip
+"%VENV_DIR%\Scripts\pip.exe" install --quiet -r "%SCRIPT_DIR%requirements.txt"
 
 :: Copy VBS launcher to startup folder
 copy /Y "%VBS_RUNNER%" "%STARTUP%\clock_wallpaper.vbs" >nul
@@ -26,6 +39,6 @@ echo.
 echo Done! Clock wallpaper will start automatically on next login.
 echo.
 echo To start now, run: wscript "%VBS_RUNNER%"
-echo To stop: kill python.exe in Task Manager
+echo To stop: kill pythonw.exe in Task Manager
 echo.
 pause

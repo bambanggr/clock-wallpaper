@@ -75,7 +75,9 @@ wscript start_wallpaper.vbs
 ### Manual (without installer)
 
 ```bash
-pip install pillow
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 python3 clock_wallpaper.py
 ```
 
