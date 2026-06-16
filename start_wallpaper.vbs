@@ -1,14 +1,19 @@
-Dim WshShell, scriptDir, venvPython, scriptPath
+Dim WshShell, scriptDir, pythonExe, scriptPath
 Set WshShell = CreateObject("WScript.Shell")
 scriptDir = Replace(WScript.ScriptFullName, "start_wallpaper.vbs", "")
-venvPython = scriptDir & ".venv\Scripts\pythonw.exe"
 scriptPath = scriptDir & "clock_wallpaper.py"
 
-' Use venv pythonw if available, fall back to system pythonw
 Dim fso
 Set fso = CreateObject("Scripting.FileSystemObject")
-If Not fso.FileExists(venvPython) Then
-    venvPython = "pythonw"
+
+' Prefer venv python, fall back to system python
+Dim venvPython
+venvPython = scriptDir & ".venv\Scripts\python.exe"
+If fso.FileExists(venvPython) Then
+    pythonExe = venvPython
+Else
+    pythonExe = "python"
 End If
 
-WshShell.Run """" & venvPython & """ """ & scriptPath & """", 0, False
+' Run hidden (0 = hidden window, False = don't wait)
+WshShell.Run """" & pythonExe & """ """ & scriptPath & """", 0, False

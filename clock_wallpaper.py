@@ -5,6 +5,7 @@ import os
 import sys
 import time
 import json
+import logging
 import platform
 import subprocess
 import tempfile
@@ -16,10 +17,11 @@ from PIL import Image, ImageDraw, ImageFont
 SCRIPT_DIR = Path(__file__).parent.resolve()
 CONFIG_FILE = SCRIPT_DIR / "config.json"
 ASSETS_DIR = SCRIPT_DIR / "assets"
+LOG_FILE = SCRIPT_DIR / "clock_wallpaper.log"
 
 DEFAULT_CONFIG = {
     "timezone": "Asia/Jakarta",
-    "time_format": "%H:%M:%S",
+    "time_format": "%H:%M",
     "background_top": "#0f0c29",
     "background_bottom": "#302b63",
     "time_color": "#ffffff",
@@ -40,6 +42,21 @@ ID_MONTHS = [
 ]
 
 RESAMPLING_NEAREST = getattr(getattr(Image, "Resampling", Image), "NEAREST")
+
+
+def setup_logging(debug: bool = False):
+    level = logging.DEBUG if debug else logging.INFO
+    handlers = [logging.StreamHandler()]
+    # Always log to file when running without terminal (e.g. pythonw on Windows)
+    if not sys.stdout or not sys.stdout.isatty():
+        handlers = [logging.FileHandler(LOG_FILE)]
+    elif debug:
+        handlers.append(logging.FileHandler(LOG_FILE))
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=handlers,
+    )
 
 
 def load_config():
@@ -141,14 +158,6 @@ def format_date(dt: datetime) -> str:
     return f"{ID_DAYS[dt.weekday()]}, {dt.day} {ID_MONTHS[dt.month]} {dt.year}"
 
 
-def draw_centered(draw, x, y, text, font, fill):
-    bbox = draw.textbbox((0, 0), text, font=font)
-    w = bbox[2] - bbox[0]
-    h = bbox[3] - bbox[1]
-    draw.text((x - w // 2, y), text, font=font, fill=fill)
-    return h
-
-
 def render_frame(cfg, base_img, now, fonts):
     img = base_img.copy()
     draw = ImageDraw.Draw(img)
@@ -157,53 +166,125 @@ def render_frame(cfg, base_img, now, fonts):
     time_str = now.strftime(cfg["time_format"])
     date_str = format_date(now)
     tz_str = "WIB"
-
     font_clock, font_date, font_tz = fonts
 
-    # Measure total block height for centering
-    def text_h(text, font):
+    def measure(text, font):
         bb = draw.textbbox((0, 0), text, font=font)
-        return bb[3] - bb[1]
+        return bb[2] - bb[0], bb[3] - bb[1]
+
+    tw, th = measure(time_str, font_clock)
+    dw, dh = measure(date_str, font_date)
+    zw, zh = measure(tz_str, font_tz)
 
     gap1, gap2 = 18, 10
-    total_h = text_h(time_str, font_clock) + gap1 + text_h(date_str, font_date) + gap2 + text_h(tz_str, font_tz)
+    total_h = th + gap1 + dh + gap2 + zh
+    max_w = max(tw, dw, zw)
 
     pos = cfg.get("position", "center")
     padding = 60
 
-    def block_x():
-        if "right" in pos:
-            return w - padding - max(
-                draw.textbbox((0, 0), time_str, font=font_clock)[2],
-                draw.textbbox((0, 0), date_str, font=font_date)[2],
-                draw.textbbox((0, 0), tz_str, font=font_tz)[2],
-            ) // 2
-        if "left" in pos:
-            return padding + max(
-                draw.textbbox((0, 0), time_str, font=font_clock)[2],
-                draw.textbbox((0, 0), date_str, font=font_date)[2],
-                draw.textbbox((0, 0), tz_str, font=font_tz)[2],
-            ) // 2
-        return w // 2
+    if pos == "center":
+        cx, cy = w // 2, h // 2 - total_h // 2
+    elif pos == "bottom-right":
+        cx, cy = w - max_w // 2 - padding, h - total_h - padding
+    elif pos == "bottom-left":
+        cx, cy = max_w // 2 + padding, h - total_h - padding
+    elif pos == "top-right":
+        cx, cy = w - max_w // 2 - padding, padding
+    elif pos == "top-left":
+        cx, cy = max_w // 2 + padding, padding
+    else:
+        cx, cy = w // 2, h // 2 - total_h // 2
 
-    def block_y():
-        if "top" in pos:
-            return padding
-        if "bottom" in pos:
-            return h - total_h - padding
-        return h // 2 - total_h // 2
+    def put(y, text, font, fill):
+        _, th = measure(text, font)
+        tw, _ = measure(text, font)
+        draw.text((cx - tw // 2, y), text, font=font, fill=fill)
+        return th
 
-    cx = block_x()
-    y = block_y()
-
-    y += draw_centered(draw, cx, y, time_str, font_clock, cfg["time_color"]) + gap1
-    y += draw_centered(draw, cx, y, date_str, font_date, cfg["date_color"]) + gap2
-    draw_centered(draw, cx, y, tz_str, font_tz, cfg["tz_color"])
+    y = cy
+    y += put(y, time_str, font_clock, cfg["time_color"]) + gap1
+    y += put(y, date_str, font_date, cfg["date_color"]) + gap2
+    put(y, tz_str, font_tz, cfg["tz_color"])
 
     return img
 
 
+def run_overlay(cfg, tz, width, height, fonts, base):
+    """
+    Tkinter canvas overlay — zero flicker.
+    Linux X11/XWayland: window type 'desktop' keeps it behind all apps.
+    Windows: HWND_BOTTOM keeps it at lowest z-order.
+    """
+    try:
+        import tkinter as tk
+        from PIL import ImageTk
+    except ImportError as e:
+        logging.error("tkinter unavailable: %s — falling back to wallpaper mode", e)
+        run_wallpaper(cfg, tz, width, height, fonts, base)
+        return
+
+    root = tk.Tk()
+    root.overrideredirect(True)
+    root.geometry(f"{width}x{height}+0+0")
+    root.configure(bg="black")
+
+    system = platform.system()
+    if system == "Linux":
+        # Works on X11 and XWayland — GNOME/XFCE/KDE respect _NET_WM_WINDOW_TYPE_DESKTOP
+        root.attributes("-type", "desktop")
+        root.lower()
+    elif system == "Windows":
+        root.update_idletasks()
+        try:
+            import ctypes
+            hwnd = root.winfo_id()
+            HWND_BOTTOM = 1
+            SWP_NOSIZE_NOMOVE = 0x0001 | 0x0002
+            ctypes.windll.user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOSIZE_NOMOVE)
+        except Exception as e:
+            logging.warning("SetWindowPos failed: %s", e)
+
+    canvas = tk.Canvas(root, width=width, height=height, highlightthickness=0, bd=0)
+    canvas.pack(fill="both", expand=True)
+
+    # Create initial frame
+    now = datetime.now(tz)
+    photo = ImageTk.PhotoImage(render_frame(cfg, base, now, fonts))
+    img_id = canvas.create_image(0, 0, image=photo, anchor="nw")
+    # holder[0] = current photo (keeps ref alive), holder[1] = last display key
+    holder = [photo, ""]
+
+    def display_key(dt):
+        return dt.strftime(cfg["time_format"]) + format_date(dt)
+
+    def ms_until_next_tick(dt):
+        """Sleep until next second; if no seconds in format, sleep to next minute."""
+        if "%S" in cfg["time_format"]:
+            return max(50, 1000 - dt.microsecond // 1000)
+        return max(50, (60 - dt.second) * 1000 - dt.microsecond // 1000)
+
+    def tick():
+        now = datetime.now(tz)
+        key = display_key(now)
+        if key != holder[1]:
+            new_photo = ImageTk.PhotoImage(render_frame(cfg, base, now, fonts))
+            canvas.itemconfig(img_id, image=new_photo)
+            holder[0] = new_photo
+            holder[1] = key
+        root.after(ms_until_next_tick(datetime.now(tz)), tick)
+
+    root.after(ms_until_next_tick(datetime.now(tz)), tick)
+
+    logging.info("Overlay mode started — %dx%d — %s", width, height, cfg["timezone"])
+    try:
+        root.mainloop()
+    except KeyboardInterrupt:
+        pass
+
+
 def set_wallpaper(path: str, system: str):
+    logging.debug("Setting wallpaper: %s", path)
     if system == "Linux":
         de = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
         session = os.environ.get("DESKTOP_SESSION", "").lower()
@@ -221,9 +302,10 @@ def set_wallpaper(path: str, system: str):
         elif any(k in de + session for k in ("xfce",)):
             try:
                 import re
-                out = subprocess.check_output(["xrandr", "--listmonitors"], stderr=subprocess.DEVNULL).decode()
-                monitors = re.findall(r"\d+: [+*]?(\S+)", out)
-                for m in monitors:
+                out = subprocess.check_output(
+                    ["xrandr", "--listmonitors"], stderr=subprocess.DEVNULL
+                ).decode()
+                for m in re.findall(r"\d+: [+*]?(\S+)", out):
                     subprocess.run(
                         ["xfconf-query", "-c", "xfce4-desktop", "-p",
                          f"/backdrop/screen0/monitor{m}/workspace0/last-image", "-s", path],
@@ -262,12 +344,76 @@ def set_wallpaper(path: str, system: str):
 
     elif system == "Windows":
         import ctypes
-        ctypes.windll.user32.SystemParametersInfoW(20, 0, path, 3)
+        result = ctypes.windll.user32.SystemParametersInfoW(20, 0, path, 3)
+        if not result:
+            logging.error("SystemParametersInfoW failed (path=%s)", path)
+        else:
+            logging.debug("Wallpaper set OK")
+
+
+def run_wallpaper(cfg, tz, width, height, fonts, base):
+    """File-based wallpaper mode. Use --wallpaper flag or on pure Wayland."""
+    system = platform.system()
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False, prefix="clock_wp_")
+    tmp_path = os.path.abspath(tmp.name)
+    tmp.close()
+
+    logging.info("Wallpaper mode started — %dx%d — %s", width, height, cfg["timezone"])
+    logging.info("Temp file: %s", tmp_path)
+
+    has_seconds = "%S" in cfg["time_format"]
+    prev_key = ""
+
+    try:
+        while True:
+            now = datetime.now(tz)
+            key = now.strftime(cfg["time_format"]) + format_date(now)
+            if key != prev_key:
+                render_frame(cfg, base, now, fonts).save(tmp_path, "PNG", compress_level=1)
+                set_wallpaper(tmp_path, system)
+                prev_key = key
+
+            if has_seconds:
+                elapsed_us = datetime.now(tz).microsecond
+                time.sleep(max(0, (1_000_000 - elapsed_us) / 1_000_000))
+            else:
+                now = datetime.now(tz)
+                time.sleep(max(0, 60 - now.second - now.microsecond / 1_000_000))
+    except KeyboardInterrupt:
+        print("\nStopped.")
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+def detect_mode(force: str | None) -> str:
+    """Return 'overlay' or 'wallpaper'."""
+    if force:
+        return force
+    system = platform.system()
+    if system == "Windows":
+        return "overlay"
+    # Linux: use overlay if any X display is available (X11 or XWayland)
+    if os.environ.get("DISPLAY"):
+        return "overlay"
+    return "wallpaper"
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Real-time clock wallpaper")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--overlay", action="store_true", help="Force tkinter overlay mode (default on X11/Windows)")
+    group.add_argument("--wallpaper", action="store_true", help="Force file-based wallpaper mode")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging to clock_wallpaper.log")
+    args = parser.parse_args()
+
+    force = "overlay" if args.overlay else ("wallpaper" if args.wallpaper else None)
+    setup_logging(args.debug)
+
     cfg = load_config()
-    system = platform.system()
     tz = ZoneInfo(cfg["timezone"])
     width, height = get_screen_size(cfg)
 
@@ -276,34 +422,16 @@ def main():
         find_font(cfg["date_font_size"]),
         find_font(cfg["tz_font_size"]),
     )
-
-    # Pre-render gradient background (reuse every frame)
     base = make_gradient(width, height, cfg["background_top"], cfg["background_bottom"])
 
-    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False, prefix="clock_wp_")
-    tmp_path = tmp.name
-    tmp.close()
+    mode = detect_mode(force)
+    logging.info("Mode: %s | %dx%d | %s", mode, width, height, cfg["timezone"])
+    print(f"Clock wallpaper | mode={mode} | {width}x{height} | {cfg['timezone']} | Ctrl+C to stop")
 
-    print(f"Clock wallpaper running | {width}x{height} | {cfg['timezone']}")
-    print(f"Temp: {tmp_path} | Ctrl+C to stop")
-
-    try:
-        while True:
-            now = datetime.now(tz)
-            img = render_frame(cfg, base, now, fonts)
-            img.save(tmp_path, "PNG", compress_level=1)
-            set_wallpaper(tmp_path, system)
-
-            # Sleep until next whole second
-            elapsed_us = datetime.now(tz).microsecond
-            time.sleep(max(0, (1_000_000 - elapsed_us) / 1_000_000))
-    except KeyboardInterrupt:
-        print("\nStopped.")
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    if mode == "overlay":
+        run_overlay(cfg, tz, width, height, fonts, base)
+    else:
+        run_wallpaper(cfg, tz, width, height, fonts, base)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 {
     "timezone": "Asia/Jakarta",
-    "time_format": "%H:%M:%S",
+    "time_format": "%H:%M",
     "background_top": "#0f0c29",
     "background_bottom": "#302b63",
     "time_color": "#ffffff",

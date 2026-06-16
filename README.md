@@ -3,7 +3,7 @@
 Real-time clock wallpaper showing current time and date in **Jakarta (WIB / UTC+7)**.
 
 ```
-         14:35:22
+         14:35
 
   Senin, 16 Juni 2026
          WIB
@@ -68,7 +68,7 @@ The installer copies a launcher to the **Startup folder** so it runs automatical
 wscript start_wallpaper.vbs
 ```
 
-**To stop:** Open Task Manager → find `pythonw.exe` → End Task.
+**To stop:** Open Task Manager → find `python.exe` → End Task.
 
 ---
 
@@ -108,7 +108,7 @@ Edit `config.json` to customize appearance:
 | Key | Description | Default |
 |-----|-------------|---------|
 | `timezone` | Any valid IANA timezone | `Asia/Jakarta` |
-| `time_format` | `strftime` format string | `%H:%M:%S` |
+| `time_format` | `strftime` format string — `%H:%M` (no seconds) or `%H:%M:%S` | `%H:%M` |
 | `background_top` | Gradient top color (hex) | `#0f0c29` |
 | `background_bottom` | Gradient bottom color (hex) | `#302b63` |
 | `time_color` | Clock text color (hex) | `#ffffff` |
