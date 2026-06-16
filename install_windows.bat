@@ -32,8 +32,14 @@ echo Installing dependencies...
 "%VENV_DIR%\Scripts\pip.exe" install --quiet --upgrade pip
 "%VENV_DIR%\Scripts\pip.exe" install --quiet -r "%SCRIPT_DIR%requirements.txt"
 
-:: Copy VBS launcher to startup folder
-copy /Y "%VBS_RUNNER%" "%STARTUP%\clock_wallpaper.vbs" >nul
+:: Generate startup VBS with absolute paths embedded (copy would break relative paths)
+> "%STARTUP%\clock_wallpaper.vbs" (
+echo Dim WshShell, pythonExe, scriptPath
+echo Set WshShell = CreateObject^("WScript.Shell"^)
+echo pythonExe = "%VENV_DIR%\Scripts\pythonw.exe"
+echo scriptPath = "%SCRIPT_DIR%clock_wallpaper.py"
+echo WshShell.Run Chr^(34^) ^& pythonExe ^& Chr^(34^) ^& " " ^& Chr^(34^) ^& scriptPath ^& Chr^(34^), 0, False
+)
 
 echo.
 echo Done! Clock wallpaper will start automatically on next login.

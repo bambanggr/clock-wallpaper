@@ -210,11 +210,47 @@ def render_frame(cfg, base_img, now, fonts):
     return img
 
 
+def _embed_in_workerw(hwnd: int, width: int, height: int) -> bool:
+    """Parent hwnd to the WorkerW layer so it renders below desktop icons."""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+
+        progman = user32.FindWindowW("Progman", None)
+        if not progman:
+            return False
+
+        # Ask Progman to spawn the WorkerW behind SHELLDLL_DefView
+        user32.SendMessageTimeoutW(progman, 0x052C, 0, 0, 0, 1000, None)
+
+        workerw_found = [0]
+        WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_size_t, ctypes.c_size_t)
+
+        def _enum_cb(h, _):
+            if user32.FindWindowExW(h, None, "SHELLDLL_DefView", None):
+                ww = user32.FindWindowExW(None, h, "WorkerW", None)
+                if ww:
+                    workerw_found[0] = ww
+            return True
+
+        cb = WNDENUMPROC(_enum_cb)
+        user32.EnumWindows(cb, 0)
+        if not workerw_found[0]:
+            return False
+
+        user32.SetParent(hwnd, workerw_found[0])
+        user32.MoveWindow(hwnd, 0, 0, width, height, True)
+        return True
+    except Exception as e:
+        logging.warning("WorkerW embed failed: %s", e)
+        return False
+
+
 def run_overlay(cfg, tz, width, height, fonts, base):
     """
     Tkinter canvas overlay — zero flicker.
-    Linux X11/XWayland: window type 'desktop' keeps it behind all apps.
-    Windows: HWND_BOTTOM keeps it at lowest z-order.
+    Linux (--overlay): window type 'desktop' keeps it behind all apps.
+    Windows: WorkerW parenting renders it below desktop icons; HWND_BOTTOM as fallback.
     """
     try:
         import tkinter as tk
@@ -236,14 +272,17 @@ def run_overlay(cfg, tz, width, height, fonts, base):
         root.lower()
     elif system == "Windows":
         root.update_idletasks()
-        try:
-            import ctypes
-            hwnd = root.winfo_id()
-            HWND_BOTTOM = 1
-            SWP_NOSIZE_NOMOVE = 0x0001 | 0x0002
-            ctypes.windll.user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOSIZE_NOMOVE)
-        except Exception as e:
-            logging.warning("SetWindowPos failed: %s", e)
+        hwnd = root.winfo_id()
+        if not _embed_in_workerw(hwnd, width, height):
+            # Fallback: push behind normal windows via z-order
+            try:
+                import ctypes
+                HWND_BOTTOM = 1
+                SWP_NOSIZE_NOMOVE = 0x0001 | 0x0002
+                ctypes.windll.user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOSIZE_NOMOVE)
+                logging.info("WorkerW unavailable — using HWND_BOTTOM fallback")
+            except Exception as e:
+                logging.warning("SetWindowPos failed: %s", e)
 
     canvas = tk.Canvas(root, width=width, height=height, highlightthickness=0, bd=0)
     canvas.pack(fill="both", expand=True)
@@ -395,9 +434,7 @@ def detect_mode(force: str | None) -> str:
     system = platform.system()
     if system == "Windows":
         return "overlay"
-    # Linux: use overlay if any X display is available (X11 or XWayland)
-    if os.environ.get("DISPLAY"):
-        return "overlay"
+    # Linux: wallpaper mode is reliable across all DEs; use --overlay to opt in
     return "wallpaper"
 
 
