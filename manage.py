@@ -15,7 +15,12 @@ try:
 except ImportError:
     sys.exit("tkinter tidak ditemukan.\nUbuntu/Debian: sudo apt install python3-tk")
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
+FROZEN = bool(getattr(sys, "frozen", False))
+SELF_EXE = Path(sys.executable).resolve() if FROZEN else None
+
+# When frozen (PyInstaller --onefile), __file__ lives in a temp extraction dir
+# that's wiped on exit — anchor to the exe's own folder instead.
+SCRIPT_DIR = SELF_EXE.parent if FROZEN else Path(__file__).parent.resolve()
 VENV_DIR   = SCRIPT_DIR / ".venv"
 CLOCK_PY   = SCRIPT_DIR / "clock_wallpaper.py"
 REQ_FILE   = SCRIPT_DIR / "requirements.txt"
@@ -47,12 +52,19 @@ def _win_find_pid() -> str:
     if PID_FILE.exists():
         pid = PID_FILE.read_text().strip()
         r = _run("tasklist", "/FI", f"PID eq {pid}")
-        if "pythonw" in r.stdout.lower():
+        if pid and pid in r.stdout:
             return pid
-    ps = (
-        "(Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe'\" |"
-        " Where-Object CommandLine -like '*clock_wallpaper*').ProcessId"
-    )
+    if FROZEN:
+        name = SELF_EXE.name
+        ps = (
+            f"(Get-CimInstance Win32_Process -Filter \"Name='{name}'\" |"
+            " Where-Object CommandLine -like '*--run-clock*').ProcessId"
+        )
+    else:
+        ps = (
+            "(Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe'\" |"
+            " Where-Object CommandLine -like '*clock_wallpaper*').ProcessId"
+        )
     r = _run("powershell", "-NoProfile", "-Command", ps)
     pid = r.stdout.strip()
     return pid if pid.isdigit() else ""
@@ -61,6 +73,8 @@ def _win_find_pid() -> str:
 # ── status ────────────────────────────────────────────────────────────────────
 
 def is_installed() -> bool:
+    if FROZEN:
+        return True  # dependencies are bundled into the exe, nothing to install
     if not VENV_PY.exists():
         return False
     if SYSTEM == "Linux":
@@ -92,9 +106,13 @@ def do_start():
     if SYSTEM == "Linux":
         _run("systemctl", "--user", "start", "clock-wallpaper")
     elif SYSTEM == "Windows":
-        pythonw = str(VENV_PY) if VENV_PY.exists() else (shutil.which("pythonw") or "python")
+        if FROZEN:
+            cmd = [str(SELF_EXE), "--run-clock"]
+        else:
+            pythonw = str(VENV_PY) if VENV_PY.exists() else (shutil.which("pythonw") or "python")
+            cmd = [pythonw, str(CLOCK_PY)]
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        proc = subprocess.Popen([pythonw, str(CLOCK_PY)], creationflags=flags)
+        proc = subprocess.Popen(cmd, creationflags=flags)
         try:
             PID_FILE.write_text(str(proc.pid))
         except OSError:
@@ -132,39 +150,50 @@ def do_disable_auto():
 
 
 def _write_startup_vbs():
-    pythonw = str(VENV_PY) if VENV_PY.exists() else "pythonw"
     STARTUP_DIR.mkdir(parents=True, exist_ok=True)
+    if FROZEN:
+        run_line = (
+            f'WshShell.Run Chr(34) & "{SELF_EXE}" & Chr(34)'
+            f' & " --run-clock", 0, False\n'
+        )
+    else:
+        pythonw = str(VENV_PY) if VENV_PY.exists() else "pythonw"
+        run_line = (
+            f'WshShell.Run Chr(34) & "{pythonw}" & Chr(34)'
+            f' & " " & Chr(34) & "{CLOCK_PY}" & Chr(34), 0, False\n'
+        )
     STARTUP_VBS.write_text(
         'Dim WshShell\n'
         'Set WshShell = CreateObject("WScript.Shell")\n'
-        f'WshShell.Run Chr(34) & "{pythonw}" & Chr(34)'
-        f' & " " & Chr(34) & "{CLOCK_PY}" & Chr(34), 0, False\n'
+        + run_line
     )
 
 
 # ── setup ─────────────────────────────────────────────────────────────────────
 
 def do_setup(log):
-    """Install deps + configure autostart. Runs in background thread."""
-    py = shutil.which("python3") or shutil.which("python")
-    if not py:
-        raise RuntimeError("Python tidak ditemukan. Install Python terlebih dahulu.")
+    """Configure autostart (+ install deps when running from source). Runs in background thread."""
+    if not FROZEN:
+        py = shutil.which("python3") or shutil.which("python")
+        if not py:
+            raise RuntimeError("Python tidak ditemukan. Install Python terlebih dahulu.")
 
-    if not VENV_PY.exists():
-        log("Membuat virtual environment...")
-        r = _run(py, "-m", "venv", str(VENV_DIR))
+        if not VENV_PY.exists():
+            log("Membuat virtual environment...")
+            r = _run(py, "-m", "venv", str(VENV_DIR))
+            if r.returncode != 0:
+                raise RuntimeError(f"venv gagal:\n{r.stderr}")
+
+        log("Menginstall Pillow (1-2 menit pertama kali)...")
+        _run(str(PIP), "install", "--quiet", "--upgrade", "pip")
+        r = _run(str(PIP), "install", "--quiet", "-r", str(REQ_FILE))
         if r.returncode != 0:
-            raise RuntimeError(f"venv gagal:\n{r.stderr}")
-
-    log("Menginstall Pillow (1-2 menit pertama kali)...")
-    _run(str(PIP), "install", "--quiet", "--upgrade", "pip")
-    r = _run(str(PIP), "install", "--quiet", "-r", str(REQ_FILE))
-    if r.returncode != 0:
-        raise RuntimeError(f"pip install gagal:\n{r.stderr}")
+            raise RuntimeError(f"pip install gagal:\n{r.stderr}")
 
     if SYSTEM == "Linux":
         log("Membuat systemd service...")
         SERVICE_DIR.mkdir(parents=True, exist_ok=True)
+        exec_line = f'"{SELF_EXE}" --run-clock' if FROZEN else f'"{VENV_PY}" "{CLOCK_PY}"'
         SERVICE_FILE.write_text(
             "[Unit]\n"
             "Description=Real-time Clock Wallpaper\n"
@@ -172,7 +201,7 @@ def do_setup(log):
             "PartOf=graphical-session.target\n\n"
             "[Service]\n"
             "Type=simple\n"
-            f"ExecStart={VENV_PY} {CLOCK_PY}\n"
+            f"ExecStart={exec_line}\n"
             "Restart=on-failure\n"
             "RestartSec=5\n\n"
             "[Install]\n"
@@ -195,12 +224,12 @@ def do_setup(log):
 
 def _install_desktop_shortcut():
     """Add to application menu and Desktop (Linux)."""
-    manage = str(SCRIPT_DIR / "manage.py")
+    manage = str(SELF_EXE) if FROZEN else f"{VENV_PY} {SCRIPT_DIR / 'manage.py'}"
     entry = (
         "[Desktop Entry]\n"
         "Name=Clock Wallpaper\n"
         "Comment=Manage the real-time clock wallpaper\n"
-        f"Exec={VENV_PY} {manage}\n"
+        f"Exec={manage}\n"
         "Terminal=false\n"
         "Type=Application\n"
         "Categories=Utility;\n"
@@ -322,7 +351,7 @@ class App(tk.Tk):
         )
 
         if inst:
-            self._lbl_setup.config(text="Sudah terinstall. Klik untuk update dependensi.")
+            self._lbl_setup.config(text="Siap pakai. Klik untuk setup ulang autostart.")
         else:
             self._lbl_setup.config(
                 text="Belum terinstall. Klik Install untuk menyiapkan semuanya."
@@ -377,4 +406,9 @@ class App(tk.Tk):
 
 
 if __name__ == "__main__":
-    App().mainloop()
+    if "--run-clock" in sys.argv:
+        sys.argv.remove("--run-clock")
+        import clock_wallpaper
+        clock_wallpaper.main()
+    else:
+        App().mainloop()

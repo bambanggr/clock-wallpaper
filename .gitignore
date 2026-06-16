@@ -7,4 +7,5 @@ build/
 venv/
 env/
 clock_wp_*.png
+.clock_pid
 *.log

@@ -11,81 +11,90 @@ Real-time clock wallpaper showing current time and date in **Jakarta (WIB / UTC+
 
 **Resource usage:** ~30–50 MB RAM, <0.5% CPU.
 
----
-
-## Requirements
-
-- Python 3.9+
-- [Pillow](https://python-pillow.org/) (`pip install pillow`)
+Runs as the actual desktop background image (not a window), so it never blocks
+clicks to desktop icons or other apps. Updates once a minute (or every second
+if you enable `%S` in the time format).
 
 ---
 
-## Installation
+## Quick start (no terminal, no Python required)
 
-### Linux
+1. Download `ClockWallpaper.exe` (Windows) or `ClockWallpaper` (Linux) from the
+   project's [Releases page](https://github.com/bambanggr/clock-wallpaper/releases) —
+   or build it yourself, see [Building the executable](#building-the-executable) below.
+2. Double-click it. A small window opens with **Start**, **Stop**, and
+   **Enable/Disable autostart** buttons.
+3. Click **Install / Update** once — this sets up autostart and starts the
+   clock immediately. From then on, use Start/Stop as needed.
+
+That's it — no Python, no venv, no terminal. This is the same `manage.py` GUI
+on both platforms, so Windows and Linux work identically once you have the
+executable.
+
+> Linux note: on first run you may need `chmod +x ClockWallpaper` and, if
+> double-click doesn't open it, `sudo apt install python3-tk` is **not**
+> needed for the prebuilt binary (it's bundled in) — that's only required if
+> you build/run from source.
+
+---
+
+## Building the executable
+
+You need [Python 3.9+](https://python.org) once, just to build. End users of
+the resulting file don't need Python at all.
+
+**Windows:**
+
+```bat
+build_windows.bat
+```
+
+Produces `dist\ClockWallpaper.exe` — copy that single file anywhere.
+
+**Linux:**
+
+```bash
+sudo apt install python3-tk   # if not already installed
+./build_linux.sh
+```
+
+Produces `dist/ClockWallpaper` — copy that single file anywhere, `chmod +x` it.
+
+**Automated builds (both platforms at once):** push a tag like `v1.0.0` and
+GitHub Actions (`.github/workflows/build.yml`) builds both the Windows `.exe`
+and the Linux binary and attaches them to a GitHub Release automatically.
+You can also trigger it manually from the Actions tab (`workflow_dispatch`)
+without tagging, and grab the build from the run's Artifacts.
+
+---
+
+## Running from source (developers)
 
 ```bash
 git clone https://github.com/bambanggr/clock-wallpaper.git
 cd clock-wallpaper
-bash install_linux.sh
-```
-
-The installer creates a **systemd user service** that starts automatically on login.
-
-**Supported desktop environments:** GNOME, XFCE, KDE Plasma, MATE, Cinnamon, LXDE/LXQt, and any DE with `feh` installed.
-
-**Useful commands after install:**
-
-```bash
-# Check status
-systemctl --user status clock-wallpaper
-
-# Stop
-systemctl --user stop clock-wallpaper
-
-# Restart (after config change)
-systemctl --user restart clock-wallpaper
-
-# View logs
-journalctl --user -u clock-wallpaper -f
-```
-
----
-
-### Windows
-
-```bat
-git clone https://github.com/bambanggr/clock-wallpaper.git
-cd clock-wallpaper
-install_windows.bat
-```
-
-The installer copies a launcher to the **Startup folder** so it runs automatically on login.
-
-**To start immediately (without rebooting):**
-
-```bat
-wscript start_wallpaper.vbs
-```
-
-**To stop:** Open Task Manager → find `python.exe` → End Task.
-
----
-
-### Manual (without installer)
-
-```bash
 python3 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python3 clock_wallpaper.py
+python3 manage.py                # GUI manager
+# or
+python3 clock_wallpaper.py       # run the clock directly, Ctrl+C to stop
 ```
+
+Double-click launchers are also available without opening a terminal:
+`manage.sh` (Linux) and `Manage Clock Wallpaper.vbs` (Windows) — both run
+`manage.py` using the local `.venv` if present.
+
+The old terminal-only installers (`install_linux.sh`, `install_windows.bat`)
+still work and set up the same systemd service / Startup-folder entry as the
+GUI manager's Install button, if you prefer scripting an install.
 
 ---
 
 ## Configuration
 
-Edit `config.json` to customize appearance:
+Edit `config.json` to customize appearance (next to the executable, or in
+the project folder when running from source):
 
 ```json
 {
@@ -121,21 +130,38 @@ Edit `config.json` to customize appearance:
 | `screen_width` | Override screen width (0 = auto-detect) | `0` |
 | `screen_height` | Override screen height (0 = auto-detect) | `0` |
 
-After editing `config.json`, restart the service:
+After editing `config.json`, restart via the GUI manager (**Stop** then
+**Start**), or:
 
 ```bash
 # Linux
 systemctl --user restart clock-wallpaper
 
-# Windows — kill pythonw.exe in Task Manager, then:
-wscript start_wallpaper.vbs
+# Windows
+# Use the manager's Stop then Start button (simplest), or end
+# ClockWallpaper.exe in Task Manager, then click Start again.
+```
+
+---
+
+## Advanced: overlay mode
+
+By default the clock renders as the actual desktop wallpaper image (most
+reliable across DEs and Windows DPI setups). A tkinter-window-based overlay
+mode also exists for advanced use, but it can mis-size on scaled displays or
+block clicks to desktop icons depending on your desktop environment/Windows
+version — most people don't need it:
+
+```bash
+python3 clock_wallpaper.py --overlay
 ```
 
 ---
 
 ## Custom Font
 
-Drop your `.ttf` font files into the `assets/` folder:
+Drop your `.ttf` font files into the `assets/` folder next to the script (or
+next to the executable, if frozen):
 
 - `assets/font.ttf` — regular
 - `assets/font-bold.ttf` — bold (used for clock)
@@ -146,6 +172,10 @@ The script uses bundled fonts if present; otherwise falls back to system fonts.
 
 ## Uninstall
 
+Easiest: open the GUI manager, click **Stop**, then **Disable** autostart.
+
+To fully remove the systemd service / Startup entry by hand:
+
 ### Linux
 
 ```bash
@@ -153,6 +183,7 @@ systemctl --user stop clock-wallpaper
 systemctl --user disable clock-wallpaper
 rm ~/.config/systemd/user/clock-wallpaper.service
 systemctl --user daemon-reload
+rm -f ~/.local/share/applications/clock-wallpaper.desktop ~/Desktop/"Clock Wallpaper.desktop"
 ```
 
 ### Windows

@@ -1,0 +1,80 @@
+name: Build executables
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+          python -m pip install -r requirements.txt
+
+      - name: Build ClockWallpaper.exe
+        run: |
+          python -m PyInstaller --onefile --windowed --name ClockWallpaper manage.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClockWallpaper-windows
+          path: dist/ClockWallpaper.exe
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system dependencies (tkinter)
+        run: sudo apt-get update && sudo apt-get install -y python3-tk
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+          python -m pip install -r requirements.txt
+
+      - name: Build ClockWallpaper binary
+        run: |
+          python -m PyInstaller --onefile --name ClockWallpaper manage.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClockWallpaper-linux
+          path: dist/ClockWallpaper
+
+  release:
+    needs: [build-windows, build-linux]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifact layout
+        run: |
+          mkdir -p release
+          cp artifacts/ClockWallpaper-windows/ClockWallpaper.exe release/ClockWallpaper-windows.exe
+          cp artifacts/ClockWallpaper-linux/ClockWallpaper release/ClockWallpaper-linux
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/ClockWallpaper-windows.exe
+            release/ClockWallpaper-linux

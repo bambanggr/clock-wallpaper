@@ -14,7 +14,12 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
+# When frozen by PyInstaller, __file__ lives in a temp extraction dir that's
+# wiped after exit — anchor to the exe's own folder instead so config/log persist.
+if getattr(sys, "frozen", False):
+    SCRIPT_DIR = Path(sys.executable).parent.resolve()
+else:
+    SCRIPT_DIR = Path(__file__).parent.resolve()
 CONFIG_FILE = SCRIPT_DIR / "config.json"
 ASSETS_DIR = SCRIPT_DIR / "assets"
 LOG_FILE = SCRIPT_DIR / "clock_wallpaper.log"
@@ -431,22 +436,39 @@ def detect_mode(force: str | None) -> str:
     """Return 'overlay' or 'wallpaper'."""
     if force:
         return force
-    system = platform.system()
-    if system == "Windows":
-        return "overlay"
-    # Linux: wallpaper mode is reliable across all DEs; use --overlay to opt in
+    # Wallpaper mode is reliable everywhere: overlay windows can end up
+    # mis-sized or eat clicks meant for desktop icons (Windows WorkerW
+    # embedding and Linux _NET_WM_WINDOW_TYPE_DESKTOP support both vary by
+    # DE/version). Use --overlay to opt into the window-based mode.
     return "wallpaper"
+
+
+def _set_dpi_aware():
+    """Without this, Windows reports scaled-down 'logical' screen metrics on
+    displays with >100% scaling, so the rendered clock undershoots the real
+    screen size."""
+    if platform.system() != "Windows":
+        return
+    import ctypes
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_DPI_AWARE
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
 
 
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Real-time clock wallpaper")
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--overlay", action="store_true", help="Force tkinter overlay mode (default on X11/Windows)")
-    group.add_argument("--wallpaper", action="store_true", help="Force file-based wallpaper mode")
+    group.add_argument("--overlay", action="store_true", help="Force tkinter overlay mode")
+    group.add_argument("--wallpaper", action="store_true", help="Force file-based wallpaper mode (default)")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging to clock_wallpaper.log")
     args = parser.parse_args()
 
+    _set_dpi_aware()
     force = "overlay" if args.overlay else ("wallpaper" if args.wallpaper else None)
     setup_logging(args.debug)
 
