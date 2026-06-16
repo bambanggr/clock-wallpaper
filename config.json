@@ -1,0 +1,15 @@
+{
+    "timezone": "Asia/Jakarta",
+    "time_format": "%H:%M:%S",
+    "background_top": "#0f0c29",
+    "background_bottom": "#302b63",
+    "time_color": "#ffffff",
+    "date_color": "#b0b0cc",
+    "tz_color": "#6060aa",
+    "position": "center",
+    "clock_font_size": 120,
+    "date_font_size": 42,
+    "tz_font_size": 28,
+    "screen_width": 0,
+    "screen_height": 0
+}
